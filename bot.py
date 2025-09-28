@@ -1,105 +1,244 @@
-# -*- coding: utf-8 -*-
-import os
-import io
-from telegram import Update, File
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
-from PIL import Image, ImageFilter
+#!/usr/bin/env python3
+"""
+Telegram Blur Bot
+A bot that applies moderate blur effects to images sent by users.
+"""
 
-# আপনার দেওয়া ডিটেইলস (ENV Variables)
-# NOTE: নিরাপত্তার জন্য, সাধারণত এই key/value গুলো সরাসরি কোডে রাখা উচিত নয়।
-# Render-এর জন্য আপনি Environment Variables ব্যবহার করতে পারেন,
-# তবে আপনার অনুরোধ অনুযায়ী আমি কোডেই দিয়ে দিচ্ছি।
+import os
+import logging
+import asyncio
+from typing import Optional
+from PIL import Image, ImageFilter
+from pyrogram import Client, filters
+from pyrogram.types import Message
+import tempfile
+import time
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Bot credentials
 API_ID = 22134923
 API_HASH = "d3e9d2f01d3291e87ea65298317f86b8"
 BOT_TOKEN = "8285636468:AAFPRQ1oS1N3I4MBI85RFEOZXW4pwBrWHLg"
 
-# Gaussian Blur এর জন্য ব্লার এর মাত্রা (Radius)।
-# 5.0 একটি মাঝারি মানের ব্লার দেয়, যা আপনার চাহিদা (বোঝা যাবে না আবার এতো কমও হবে না) পূরণের জন্য উপযুক্ত।
-BLUR_RADIUS = 5.0 
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """বট শুরু হলে /start কমান্ডের উত্তর দেয়।"""
-    await update.message.reply_text(
-        "👋 নমস্কার! আমি আপনার ইমেজ ব্লার বট। আমাকে একটি ছবি পাঠান, আমি এটিকে হালকা ব্লার করে ফেরত দেবো।\n"
-        "আমার ব্লার এর মাত্রা: {BLUR_RADIUS}"
-    )
-
-async def blur_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """ইউজারের পাঠানো ছবি ডাউনলোড করে, ব্লার করে এবং ব্লার করা ছবি ফেরত পাঠায়।"""
-    chat_id = update.message.chat_id
-    
-    # 1. ছবি ডাউনলোড করা
-    try:
-        # টেলিগ্রাম থেকে ছবির সবচেয়ে বড় সাইজের ফাইলটি নেওয়া
-        photo_file_id = update.message.photo[-1].file_id
-        new_file: File = await context.bot.get_file(photo_file_id)
-        
-        # ফাইলটিকে মেমরিতে ডাউনলোড করা 
-        # (Render-এ ফাইল সিস্টেমে সেভ না করে মেমরিতে কাজ করা ভালো)
-        image_data = await new_file.download_as_bytes()
-        
-    except Exception as e:
-        await update.message.reply_text("ছবি ডাউনলোডে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।")
-        print(f"Error downloading image: {e}")
-        return
-
-    await update.message.reply_text("ছবিটি পেয়েছি। ব্লার করছি... ⏳")
-
-    # 2. ছবি এডিট করে ব্লার করা
-    try:
-        # বাইট ডেটা থেকে PIL ইমেজ অবজেক্ট তৈরি করা
-        original_image = Image.open(io.BytesIO(image_data))
-        
-        # Gaussian Blur প্রয়োগ করা 
-        # GaussianBlur সাধারণত ভালো, প্রাকৃতিক ব্লার এফেক্ট দেয়।
-        blurred_image = original_image.filter(ImageFilter.GaussianBlur(radius=BLUR_RADIUS))
-
-        # ব্লার করা ছবিটি সেভ করার জন্য একটি মেমরি বাফার তৈরি করা
-        buffered_output = io.BytesIO()
-        # ছবির আসল ফরম্যাট বজায় রাখতে original_image.format ব্যবহার করা উচিত, তবে 
-        # JPEG ব্যবহার করা হলো যাতে সব ঠিক থাকে। PNG/GIF-এর ক্ষেত্রেও সেভ করা যেতে পারে।
-        if original_image.mode in ('RGBA', 'P'):
-            # ট্রান্সপারেন্সি থাকলে PNG ব্যবহার করা
-            blurred_image.save(buffered_output, format="PNG")
-        else:
-            blurred_image.save(buffered_output, format="JPEG")
-            
-        buffered_output.seek(0)
-        
-    except Exception as e:
-        await update.message.reply_text("ছবি ব্লার করার সময় একটি সমস্যা হয়েছে। ❌")
-        print(f"Error processing image: {e}")
-        return
-        
-    # 3. ব্লার করা ছবি ফেরত পাঠানো
-    try:
-        await context.bot.send_photo(
-            chat_id=chat_id,
-            photo=buffered_output,
-            caption=f"ছবিটি সফলভাবে ব্লার করা হয়েছে (Radius: {BLUR_RADIUS})। ✅"
+class TelegramBlurBot:
+    def __init__(self):
+        """Initialize the Telegram Blur Bot."""
+        self.app = Client(
+            "blur_bot",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            bot_token=BOT_TOKEN
         )
+        
+        # Create temp directory for processing
+        self.temp_dir = "/home/sandbox/telegram_blur_bot/temp"
+        os.makedirs(self.temp_dir, exist_ok=True)
+        
+        # Register handlers
+        self.register_handlers()
+    
+    def register_handlers(self):
+        """Register message handlers."""
+        self.app.on_message(filters.command("start"))(self.start_command)
+        self.app.on_message(filters.command("help"))(self.help_command)
+        self.app.on_message(filters.photo & filters.private)(self.handle_photo)
+        self.app.on_message(filters.document & filters.private)(self.handle_document)
+        self.app.on_message(filters.text & filters.private & ~filters.command(["start", "help"]))(self.handle_text)
+    
+    async def start_command(self, client: Client, message: Message):
+        """Handle /start command."""
+        welcome_text = """
+🌟 **Welcome to Blur Bot!** 🌟
+
+I can apply a moderate blur effect to your images while keeping them recognizable.
+
+**How to use:**
+1. Send me any image (photo or document)
+2. I'll process it and send back the blurred version
+3. The blur effect obscures details but maintains recognizability
+
+**Supported formats:** JPG, PNG, WEBP, BMP, TIFF
+
+Just send me an image to get started! 📸✨
+        """
+        await message.reply_text(welcome_text)
+    
+    async def help_command(self, client: Client, message: Message):
+        """Handle /help command."""
+        help_text = """
+🔧 **Blur Bot Help** 🔧
+
+**Commands:**
+• `/start` - Show welcome message
+• `/help` - Show this help message
+
+**Usage:**
+• Send any image as a photo or document
+• I'll apply a moderate blur effect
+• You'll receive the blurred image back
+
+**Features:**
+• Fast processing ⚡
+• Maintains image quality 📸
+• Works with various formats 🖼️
+• Private chat only 🔒
+
+**Tips:**
+• Larger images may take a bit longer to process
+• The blur effect is designed to obscure details while keeping the image recognizable
+        """
+        await message.reply_text(help_text)
+    
+    async def handle_text(self, client: Client, message: Message):
+        """Handle text messages."""
+        await message.reply_text(
+            "Please send me an image to apply blur effect! 📸\n\n"
+            "You can send images as photos or documents."
+        )
+    
+    async def handle_photo(self, client: Client, message: Message):
+        """Handle photo messages."""
+        await self.process_image(client, message, is_photo=True)
+    
+    async def handle_document(self, client: Client, message: Message):
+        """Handle document messages (for image files)."""
+        if not message.document:
+            return
+        
+        # Check if document is an image
+        mime_type = message.document.mime_type or ""
+        if not mime_type.startswith("image/"):
+            await message.reply_text(
+                "Please send image files only! 🖼️\n\n"
+                "Supported formats: JPG, PNG, WEBP, BMP, TIFF"
+            )
+            return
+        
+        await self.process_image(client, message, is_photo=False)
+    
+    async def process_image(self, client: Client, message: Message, is_photo: bool):
+        """Process and blur the image."""
+        try:
+            # Send processing message
+            processing_msg = await message.reply_text("🔄 Processing your image...")
+            
+            # Create unique filename
+            timestamp = str(int(time.time()))
+            user_id = message.from_user.id
+            
+            # Download the image
+            if is_photo:
+                file_path = await message.download(
+                    file_name=f"{self.temp_dir}/input_{user_id}_{timestamp}.jpg"
+                )
+            else:
+                file_path = await message.download(
+                    file_name=f"{self.temp_dir}/input_{user_id}_{timestamp}_{message.document.file_name}"
+                )
+            
+            logger.info(f"Downloaded image: {file_path}")
+            
+            # Apply blur effect
+            blurred_path = await self.apply_blur_effect(file_path, user_id, timestamp)
+            
+            # Update processing message
+            await processing_msg.edit_text("📤 Sending blurred image...")
+            
+            # Send the blurred image
+            await message.reply_photo(
+                photo=blurred_path,
+                caption="✨ **Blurred Image Ready!** ✨\n\nYour image has been processed with a moderate blur effect."
+            )
+            
+            # Clean up files
+            self.cleanup_files([file_path, blurred_path])
+            
+            # Delete processing message
+            await processing_msg.delete()
+            
+            logger.info(f"Successfully processed image for user {user_id}")
+            
+        except Exception as e:
+            logger.error(f"Error processing image: {str(e)}")
+            await message.reply_text(
+                "❌ **Error processing image!**\n\n"
+                "Please try again with a different image or contact support if the problem persists."
+            )
+    
+    async def apply_blur_effect(self, input_path: str, user_id: int, timestamp: str) -> str:
+        """Apply moderate blur effect to the image."""
+        try:
+            # Open the image
+            with Image.open(input_path) as img:
+                # Convert to RGB if necessary (for JPEG compatibility)
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    # Convert to RGB, handling transparency
+                    if img.mode == 'P':
+                        img = img.convert('RGBA')
+                    
+                    # Create white background
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    if img.mode == 'RGBA':
+                        background.paste(img, mask=img.split()[-1])  # Use alpha channel as mask
+                    else:
+                        background.paste(img)
+                    img = background
+                elif img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Apply moderate blur effect
+                # Using Gaussian blur with radius 3 for moderate effect
+                blurred_img = img.filter(ImageFilter.GaussianBlur(radius=3))
+                
+                # Generate output path
+                output_path = f"{self.temp_dir}/blurred_{user_id}_{timestamp}.jpg"
+                
+                # Save with good quality
+                blurred_img.save(output_path, 'JPEG', quality=85, optimize=True)
+                
+                logger.info(f"Applied blur effect: {output_path}")
+                return output_path
+                
+        except Exception as e:
+            logger.error(f"Error applying blur effect: {str(e)}")
+            raise
+    
+    def cleanup_files(self, file_paths: list):
+        """Clean up temporary files."""
+        for file_path in file_paths:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info(f"Cleaned up file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Could not clean up file {file_path}: {str(e)}")
+    
+    async def run(self):
+        """Start the bot."""
+        logger.info("Starting Telegram Blur Bot...")
+        await self.app.start()
+        logger.info("Bot started successfully!")
+        
+        # Keep the bot running
+        await asyncio.Event().wait()
+
+async def main():
+    """Main function to run the bot."""
+    bot = TelegramBlurBot()
+    try:
+        await bot.run()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
     except Exception as e:
-        await update.message.reply_text("ব্লার করা ছবি পাঠাতে সমস্যা হয়েছে।")
-        print(f"Error sending blurred image: {e}")
-
-
-def main() -> None:
-    """বট শুরু করে।"""
-    # Application তৈরি করা
-    application = Application.builder().token(BOT_TOKEN).build()
-
-    # কমান্ড এবং মেসেজ হ্যান্ডলার যোগ করা
-    application.add_handler(CommandHandler("start", start_command))
-    # 'photo' কন্টেন্ট টাইপের মেসেজগুলোর জন্য হ্যান্ডলার
-    application.add_handler(MessageHandler(filters.PHOTO, blur_image))
-
-    # বটকে চালু রাখা 
-    # Render-এ Webhook ব্যবহার করা সবচেয়ে ভালো, কিন্তু সহজতম উপায়ের জন্য Polling ব্যবহার করা হলো।
-    # আপনি Webhook-এর জন্য কোডটি পরিবর্তন করতে পারেন যদি আপনার প্রয়োজন হয়।
-    print("বট চালু হচ্ছে... Polling শুরু হলো।")
-    application.run_polling(poll_interval=3)
+        logger.error(f"Bot error: {str(e)}")
+    finally:
+        await bot.app.stop()
 
 if __name__ == "__main__":
-    # CommandHandler-কে main-এর বাইরে ডিফাইন করা হয়, তাই এটিকে এখানে ইম্পোর্ট করতে হবে।
-    from telegram.ext import CommandHandler
-    main()
+    asyncio.run(main())
