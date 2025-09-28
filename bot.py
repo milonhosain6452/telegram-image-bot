@@ -16,12 +16,17 @@ app = Client("blur_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 # Start command
 @app.on_message(filters.command("start"))
 async def start(client, message: Message):
-    await message.reply_text("হ্যালো! আমাকে ইমেজ পাঠাও, আমি সেটি ব্লার করে দিব।")
+    await message.reply_text(
+        "হ্যালো! আমাকে ইমেজ পাঠাও, আমি সেটি ব্লার করে দিব।\n\n"
+        "⚡️ কিভাবে ব্যবহার করবেন:\n"
+        "1️⃣ যেকোনো ছবি পাঠান\n"
+        "2️⃣ আমি সেটি moderate ব্লার করে ফিরে দিব।"
+    )
 
 # Handle incoming images
 @app.on_message(filters.photo)
 async def blur_image(client, message: Message):
-    await message.reply_text("🖌 ব্লার প্রক্রিয়া শুরু হচ্ছে...")
+    msg = await message.reply_text("🖌 ব্লার প্রক্রিয়া শুরু হচ্ছে...")
 
     # Download image into memory
     image_bytes = await message.download(file=io.BytesIO())
@@ -30,7 +35,7 @@ async def blur_image(client, message: Message):
     img = Image.open(image_bytes)
 
     # Apply moderate blur
-    blurred_img = img.filter(ImageFilter.GaussianBlur(radius=5))  # Moderate blur, adjust if needed
+    blurred_img = img.filter(ImageFilter.GaussianBlur(radius=5))  # Moderate blur
 
     # Save to bytes
     output_bytes = io.BytesIO()
@@ -40,6 +45,7 @@ async def blur_image(client, message: Message):
 
     # Send back blurred image
     await message.reply_photo(photo=output_bytes, caption="✅ ব্লার করা ইমেজ।")
+    await msg.delete()  # Remove "processing" message
 
 # Run bot
 print("Bot is running...")
