@@ -1,3 +1,5 @@
-pyrogram==2.0.106
+pyrogram==2.0.41
+tgcrypto==1.2.3
+Pillow==10.1.0==2.0.106
 pillow==10.0.1
 tgcrypto==1.2.5
